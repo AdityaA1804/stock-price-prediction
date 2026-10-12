@@ -1,23 +1,67 @@
 # Next-Day Stock Price Prediction with EDA-Driven Feature Engineering
 
-Forecasting the next trading day's closing price of ten NSE-listed stocks from the previous *N* days of market data. The project covers the full workflow — **exploratory data analysis → feature engineering based on the EDA findings → tuning and comparison of 10 machine-learning models against rule-based baselines** — with leakage-safe time-series validation and an ablation study that measures how much the engineered inputs contribute.
+Forecasting the next trading day's closing price of ten NSE-listed stocks from the previous *N* days of market data: **exploratory data analysis → feature engineering based on the EDA findings → tuning and comparison of 10 machine-learning models against rule-based baselines**, with leakage-safe time-series validation and an ablation study that measures how much the engineered inputs contribute.
 
-**Result:** the best tuned model edges out the naive forecast on all 10 stocks, but only by **0.1 – 2.2 % RMSE** (best: Decision Tree on MINDTREE, RMSE 2.2 % below naive). Direction accuracy ranges from 46 % to 61 %. Next-day returns in this data are close to unpredictable from price and volume history alone — a result the EDA anticipates and the ablation study confirms.
+## Problem statement
+
+**Task.** At the close of each trading day *t*, using only the market data available up to that moment, predict the stock's official closing price on the next trading day, *t + 1*.
+
+**Inputs.** The previous *N* trading days (default *N* = 10) of the stock's own daily record: open, high, low, close, volume-weighted average price, traded volume, number of trades and the percentage of traded shares taken into delivery. No external data — no index levels, peer stocks, fundamentals or news.
+
+**Target.** Models predict the next-day return *r̂* = Close<sub>t+1</sub> / Close<sub>t</sub> − 1 and the price forecast is Close<sub>t</sub> × (1 + *r̂*). All errors are measured on the price forecast, in rupees, so that models and rule-based baselines are compared on the same footing.
+
+**Why it is hard.**
+
+- The signal is tiny relative to the noise: a typical daily move is about 1.3 % and the day-to-day correlation of returns is close to zero, so most of tomorrow's change is unpredictable from today's data.
+- The series are non-stationary: price levels trend, volume is skewed and drifts, and the test period (Oct 2020 – Mar 2021) trades at prices never seen during training (which includes the March 2020 crash). A model that learns price levels cannot extrapolate.
+- Time-series data make it easy to leak the future into training through careless scaling, shuffled cross-validation or features that peek ahead.
+
+**What counts as success.** A model is useful only if it beats the two forecasts that need no model at all — **naive** (tomorrow's close = today's) and **naive + drift** (today's close grown by the average daily return) — on the held-out test period, measured by RMSE, and does so consistently across the ten stocks rather than on one lucky ticker. Direction accuracy (did the model call up/down correctly?) is a secondary criterion.
+
+**Out of scope.** Multi-day horizons, prediction intervals, trading strategies and transaction costs.
+
+## Key result
+
+The best tuned model edges out the naive forecast on all 10 stocks, but only by **0.1 – 2.2 % RMSE** (best: Decision Tree on MINDTREE, 2.2 % below naive). Direction accuracy ranges from 46 % to 61 %. Next-day returns in this data are close to unpredictable from price and volume history alone — a result the EDA anticipates and the ablation study confirms.
 
 <p align="center">
   <img src="reports/figures/best_model_prediction.png" width="49%">
   <img src="reports/figures/best_model_per_stock.png" width="49%">
 </p>
 
-## Problem
-
-Given daily open, high, low, close, VWAP, volume, number of trades and delivery percentage, predict the **next day's close**. Daily price changes are small and noisy, so every model is judged against two strong benchmarks: the **naive** forecast (tomorrow = today) and **naive + drift** (today × average daily return).
-
 ## Data
 
-Daily NSE data for TCS, INFY, WIPRO, TECHM, LTI, LTTS, MINDTREE, MPHASIS, OFSS and BEL, March 2019 – March 2021 (~500 trading days per stock, including the COVID-19 crash). See [`data/README.md`](data/README.md) for the column dictionary and cleaning steps.
+Daily NSE data for TCS, INFY, WIPRO, TECHM, LTI, LTTS, MINDTREE, MPHASIS, OFSS and BEL, 05-Mar-2019 to 03-Mar-2021 (~500 trading days per stock, including the COVID-19 crash). Nine of the ten are IT-services companies; BEL (defence electronics) is included as a contrast. See [`data/README.md`](data/README.md) for the column dictionary and cleaning steps.
 
-## 1. Exploratory data analysis
+## Methodology
+
+The same pipeline is run independently for each stock:
+
+```
+raw CSV ─► clean (EQ rows only, sort, index by date)
+        ─► window features for each day (uses data up to that day's close only)
+        ─► chronological split: first 80 % of days = train, last 20 % = test
+        ─► tune each model with grid search on 5-fold TimeSeriesSplit (train only)
+        ─► score tuned models and baselines on the test period, in price terms
+        ─► refit the best configuration on all data ─► next-day forecast
+        ─► experiments: feature ablation, window sensitivity, best model per stock
+```
+
+**Evaluation protocol**
+
+| Choice | Why |
+|---|---|
+| Chronological 80 / 20 split, no shuffling | Test days all come after training days, as in real forecasting |
+| `TimeSeriesSplit` cross-validation for tuning | Every validation fold is later than the data it is validated against; hyperparameters are never chosen using future information |
+| `StandardScaler` inside each `Pipeline` | Scaling statistics are computed on each training fold only |
+| Drift baseline estimated on training data | The baseline is given no more information than the models |
+| Primary metric: test RMSE ÷ naive RMSE | Puts stocks with different price levels (₹100 vs ₹3000) on a common scale; < 1 means the model beats doing nothing |
+| Secondary: MAE, MAPE, direction accuracy | Robustness to outliers, relative error, and whether the sign of the move is right |
+| Ten stocks, not one | A result that holds on one ticker over ~97 test days could easily be chance |
+
+The three stages below describe how the inputs and models were developed; the [Results](#results) section reports what came out.
+
+### 1. Exploratory data analysis
 
 Notebook: [`stock_prediction.ipynb`](stock_prediction.ipynb), sections 1–2.
 
@@ -45,7 +89,7 @@ Key numbers for TCS (the stock used in the figures):
 - Raw price columns correlate at 0.99+ with one another — a shared trend, not predictive information.
 - The strongest correlation between any of today's stationary signals and tomorrow's return is **−0.11** (today's return, i.e. slight mean reversion); every other signal is below |0.09|.
 
-## 2. Feature engineering
+### 2. Feature engineering
 
 Notebook section 3 · code: [`src/features.py`](src/features.py)
 
@@ -86,7 +130,7 @@ What it shows:
 - **Ridge** and **XGBoost** are nearly indifferent to the input set — every row is within ±0.7 % of naive. Heavy regularisation (Ridge α = 10⁴–10⁵) and shallow trees mean both models largely learn the constant drift regardless of what they are given.
 - No feature set pushes any model meaningfully below 1.0. The transforms make the inputs *well-behaved*; they do not make tomorrow's return *predictable*.
 
-## 3. Modelling
+### 3. Modelling
 
 Notebook sections 4–10 · code: [`src/models.py`](src/models.py), [`src/pipeline.py`](src/pipeline.py)
 
@@ -96,6 +140,18 @@ Notebook sections 4–10 · code: [`src/models.py`](src/models.py), [`src/pipeli
 | Linear | Linear Regression, Ridge, Lasso |
 | Distance / kernel | KNN, SVR (RBF) |
 | Trees | Decision Tree, Random Forest, Extra Trees, Gradient Boosting, XGBoost |
+
+**Baselines** (code: [`src/baselines.py`](src/baselines.py)) are rule-based forecasts that need no training. Each ML model's RMSE is reported relative to the first one:
+
+| Baseline | Next-day close forecast | Assumes |
+|---|---|---|
+| `Naive` | Today's close | Tomorrow looks like today (random walk) |
+| `Naive + drift` | Today's close × (1 + mean daily return) | Random walk with the average upward drift; the drift is estimated on training data only |
+| `Linear_3d` | Straight line fitted through the last 3 closes, extended one day | The recent trend continues |
+| `Quadratic_3d` | Parabola fitted through the last 3 closes, extended one day | The recent trend *and* its curvature continue |
+| `Window_mean` | Average close over the last `window` days | Price reverts to its recent mean |
+
+The two naive forecasts are the ones to beat; the extrapolation baselines are included to show that chasing short-term trends is worse than doing nothing.
 
 - Hyperparameters tuned with `GridSearchCV` on 5-fold `TimeSeriesSplit` using the training period only.
 - Feature scaling inside a `Pipeline`, fitted on each training fold only.
