@@ -1,0 +1,22 @@
+# Pipeline settings. Command-line options override these values.
+
+data_dir: data/raw             # all .csv files in this folder are read
+results_dir: reports/results   # tables and per-model plots (not committed)
+figures_dir: reports/figures   # figures shown in the README (committed to GitHub)
+
+symbols: all                   # "all", or a list such as [TCS, INFY]
+readme_symbol: TCS             # stock used for the README model figures
+window: 10                     # number of past trading days used as input
+test_part: 0.2                 # fraction of the most recent days held out for testing
+cv_splits: 5                   # TimeSeriesSplit folds used for tuning
+random_state: 42
+
+# Models for the main run; leave empty for all.
+# Available: Linear, Ridge, Lasso, KNN, SVR, Decision Tree, Random Forest,
+#            Extra Trees, Gradient Boosting, XGBoost
+models: []
+
+experiments:
+  run: true                    # feature ablation + window sensitivity
+  models: [Ridge, KNN, XGBoost]
+  windows: [5, 10, 20]
